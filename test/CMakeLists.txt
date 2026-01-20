@@ -22,7 +22,7 @@ target_link_libraries(${TESTING}
         ${LIBRARY_NAME}
 )
 
-add_test(NAME t_wae
+add_test(NAME t_audio_engine
         COMMAND
         $<TARGET_FILE:${TESTING}>
 )

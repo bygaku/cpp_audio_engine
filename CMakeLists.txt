@@ -19,7 +19,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # If testing modules, Set it to ON this option.
 option(BUILD_TEST "[RootLists]: build with test directory? *default is ON" ON)
 # Set it to ON to create an executable file.
-option(BUILD_EXE "[RootLists]: wanna create an executable file? *default is OFF" OFF)
+option(BUILD_EXE "[RootLists]: wanna create an executable file? *default is OFF" ON)
 
 # own library directory
 add_subdirectory(./lib)

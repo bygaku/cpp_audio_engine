@@ -13,6 +13,13 @@ target_include_directories(${LIBRARY_NAME}
 
 # Compiler options.
 if(MSVC)
+    target_link_libraries(${LIBRARY_NAME}
+            mmdevapi
+            ksuser
+            ole32
+            uuid
+            advapi32
+    )
     target_compile_definitions(${LIBRARY_NAME}
             PRIVATE
             UNICODE     # Unicode mode
