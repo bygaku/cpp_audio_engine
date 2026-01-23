@@ -3,16 +3,15 @@
 //
 
 #include "wistlib/audio_engine.h"
+
 #include <iostream>
-#include <cmath>
 #include <fstream>
 
 using namespace wwist;
 using namespace wwist::audio_engine;
 
 AudioEngine::AudioEngine(const AudioStreamMode& mode)
-	: running_(false)
-	, device_(nullptr)
+	: device_(nullptr)
 	, device_enum_(nullptr)
 	, audio_client_(nullptr)
 	, render_client_(nullptr)
@@ -22,13 +21,10 @@ AudioEngine::AudioEngine(const AudioStreamMode& mode)
 	, next_buffer_(1)
 	, event_handle_()
 	, render_thread_() {
-	auto hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-	_ASSERT(SUCCEEDED(hr));
-
 	void* start_event	  = CreateEventEx(nullptr, nullptr, false, EVENT_ALL_ACCESS);
+	event_handle_[0]	  = start_event;
 	void* terminate_event = CreateEventEx(nullptr, nullptr, false, EVENT_ALL_ACCESS);
-	event_handle_[0] = start_event;
-	event_handle_[1] = terminate_event;
+	event_handle_[1]	  = terminate_event;
 
 	EnumerateRenderDevice();
 }
@@ -60,20 +56,22 @@ HRESULT AudioEngine::Initialize() {
 }
 
 AudioEngine::~AudioEngine() {
-}
-
-void AudioEngine::Terminate() {
-	// Terminate render thread.
-	if (render_thread_.joinable() == true) {
+	// Signal thread to stop and wait for it.
+	if (render_thread_.joinable()) {
 		SetEvent(event_handle_[1]);
 		render_thread_.join();
 	}
 
 	// Release handles.
 	for (void*& i : event_handle_) {
-		if (i != nullptr) CloseHandle(i);
+		if (i) CloseHandle(i);
 	}
-}
+
+	// Free stream_format_.
+	if (stream_format_) {
+		CoTaskMemFree(stream_format_);
+	}
+};	// Releasing ComPtr.
 
 HRESULT AudioEngine::Start() const {
 	auto hr = audio_client_->Start();
@@ -126,6 +124,7 @@ void AudioEngine::RenderStream() {
 
 void AudioEngine::Update() {
 	// Handling audio sources.
+	std::cout << "StreamFormat->cbSize: " << stream_format_->cbSize << std::endl;
 }
 
 void AudioEngine::ActivateSharedStream() {
@@ -141,9 +140,10 @@ void AudioEngine::ActivateSharedStream() {
 	hr = audio_client_->GetDevicePeriod(&def_period, &min_period);
 	_ASSERT(SUCCEEDED(hr));
 
-	// Check whether the stream format is supported.
-	stream_format_				  = static_cast<WAVEFORMATEX*>(GetFormat());
+#pragma region // Check whether the stream format is supported.
+	hr = audio_client_->GetMixFormat(&stream_format_);
 	WAVEFORMATEXTENSIBLE* closest = nullptr;
+	_ASSERT(SUCCEEDED(hr));
 
 	hr = audio_client_->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED
 									, stream_format_
@@ -153,6 +153,7 @@ void AudioEngine::ActivateSharedStream() {
 		// Restore closest in StreamFormat structure.
 		*stream_format_ = closest->Format;
 	}
+#pragma endregion
 
 	// Initialize the audio client.
 	hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED
@@ -187,7 +188,8 @@ void AudioEngine::ActivateSharedStream() {
 		_ASSERT(SUCCEEDED(hr));
 
 		// Restore format.
-		stream_format_ = static_cast<WAVEFORMATEX*>(GetFormat());
+		hr = audio_client_->GetMixFormat(&stream_format_);
+		_ASSERT(SUCCEEDED(hr));
 		closest = nullptr;
 
 		hr = audio_client_->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED
@@ -213,10 +215,14 @@ void AudioEngine::ActivateSharedStream() {
 
 	hr = audio_client_->SetEventHandle(event_handle_[0]);
 	_ASSERT(SUCCEEDED(hr));
-
 }
 
 void AudioEngine::ActivateExclusiveStream() {
+	// The number of retries for IsFormatSupported().
+	size_t			num_loops	= 0;
+	constexpr int	MAX_RETRIES	= 5;
+	HRESULT			result		= S_OK;
+
 	// Activate the audio client.
 	auto hr = device_->Activate(__uuidof(IAudioClient)
 										, CLSCTX_ALL
@@ -225,19 +231,45 @@ void AudioEngine::ActivateExclusiveStream() {
 	);
 	_ASSERT(SUCCEEDED(hr));
 
-	// Check whether the stream format is supported.
-	stream_format_ = static_cast<WAVEFORMATEX*>(GetFormat());
-
-	hr = audio_client_->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE
-										, stream_format_
-										, nullptr
-	);
-	_ASSERT(hr == S_OK);	// S_FALSE and AUDCLNT_E_UNSUPPORTED_FORMAT are not allowed.
-
 	// Retrieve the device period for latency from the audio client.
 	REFERENCE_TIME def_period, min_period = 0;
 	hr = audio_client_->GetDevicePeriod(&def_period, &min_period);
 	_ASSERT(SUCCEEDED(hr));
+
+	#pragma region // Check whether the stream format is supported.
+	ComPtr<IPropertyStore> store = nullptr;
+	hr = device_->OpenPropertyStore(STGM_READ, &store);
+	_ASSERT(SUCCEEDED(hr));
+
+	PROPVARIANT   p_var{};
+	WAVEFORMATEX* pBlobData = nullptr;
+	do {
+		hr = store->GetValue(PKEY_AudioEngine_DeviceFormat, &p_var);
+		_ASSERT(SUCCEEDED(hr));
+
+		pBlobData = reinterpret_cast<WAVEFORMATEX*>(p_var.blob.pBlobData);
+
+		result = audio_client_->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE
+												, pBlobData
+												, nullptr
+		);
+
+		num_loops++;
+		// Failed to retry IsFormatSupported().
+		if (num_loops > MAX_RETRIES) {
+			std::cout << "Failed to activate the audio client." << std::endl;
+			// TODO: Have to add exit process here.
+		}
+	} while (result != S_OK);
+	#pragma endregion
+
+	const size_t format_size = pBlobData->cbSize + sizeof(WAVEFORMATEX);
+	stream_format_ = static_cast<WAVEFORMATEX*>(CoTaskMemAlloc(format_size));
+	memcpy(stream_format_, pBlobData, format_size);
+
+	hr = PropVariantClear(&p_var);
+	_ASSERT(SUCCEEDED(hr));
+
 
 	// Initialize the audio client.
 	hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE
@@ -348,30 +380,5 @@ HRESULT AudioEngine::AssignRenderDevice(const uint32_t &device_idx) {
 		_ASSERT(SUCCEEDED(hr));
 	}
 
-	return true;
-}
-
-void* AudioEngine::GetFormat() {
-	WAVEFORMATEXTENSIBLE* fmt;
-	auto hr = S_OK;
-
-	// Mode::Shared
-	if (stream_mode_ == AudioStreamMode::RENDER_SHARED) {
-		hr = audio_client_->GetMixFormat(reinterpret_cast<WAVEFORMATEX**>(&fmt));
-		_ASSERT(SUCCEEDED(hr));
-	}
-	// Mode::Exclusive
-	else {
-		ComPtr<IPropertyStore> store = nullptr;
-		hr = device_->OpenPropertyStore(STGM_READ, &store);
-		_ASSERT(SUCCEEDED(hr));
-
-		PROPVARIANT var{};
-		hr = store->GetValue(PKEY_AudioEngine_DeviceFormat, &var);
-		_ASSERT(SUCCEEDED(hr));
-
-		fmt = reinterpret_cast<WAVEFORMATEXTENSIBLE*>(var.blob.pBlobData);
-	}
-
-	return fmt;
+	return hr;
 }

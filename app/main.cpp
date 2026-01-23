@@ -21,24 +21,26 @@ int WINAPI WinMain (HINSTANCE hInstance,
 	auto hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
 	_ASSERT(SUCCEEDED(hr));
 
-	AudioEngine engine {AudioEngine::AudioStreamMode::RENDER_SHARED};
-	hr = engine.Initialize();
+	std::unique_ptr<AudioEngine> engine =
+		std::make_unique<AudioEngine>(AudioEngine::AudioStreamMode::RENDER_EXCLUSIVE);
+	hr = engine->Initialize();
 	_ASSERT(SUCCEEDED(hr));
 
-	hr = engine.Start();
+	hr = engine->Start();
 	_ASSERT(SUCCEEDED(hr));
 
 	while (!(GetKeyState(VK_ESCAPE) & 0x80)) {
-		engine.Update();
+		engine->Update();
 	}
 
-	hr = engine.Stop();
+	hr = engine->Stop();
 	_ASSERT(SUCCEEDED(hr));
 
-	engine.Terminate();
+	engine.reset();
+
 	CoUninitialize();
 #ifdef POPUP_CONSOLE
-	Sleep(1000);
+	Sleep(500);
 	FreeConsole();
 #endif
 	return 0;
