@@ -3,7 +3,7 @@
 //
 
 #include <iostream>
-#include <wistlib/audio_engine.h>
+#include <witlib/audio_engine.h>
 
 #ifdef WIN32
 #include <windows.h>
@@ -22,7 +22,7 @@ int WINAPI WinMain (HINSTANCE hInstance,
 	_ASSERT(SUCCEEDED(hr));
 
 	std::unique_ptr<AudioEngine> engine =
-		std::make_unique<AudioEngine>(AudioEngine::AudioStreamMode::RENDER_EXCLUSIVE);
+		std::make_unique<AudioEngine>(AudioEngine::AudioStreamMode::RENDER_SHARED);
 	hr = engine->Initialize();
 	_ASSERT(SUCCEEDED(hr));
 
