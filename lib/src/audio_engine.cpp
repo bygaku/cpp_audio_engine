@@ -16,7 +16,7 @@ AudioEngine::AudioEngine(const AudioStreamMode& mode)
 	, audio_client_(nullptr)
 	, render_client_(nullptr)
 	, render_devices_(nullptr)
-	, stream_format_(new WAVEFORMATEX)
+	, stream_format_(nullptr)
 	, stream_mode_(mode)
 	, next_buffer_(1)
 	, event_handle_()
@@ -38,10 +38,11 @@ HRESULT AudioEngine::Initialize() {
 
 	// Activate
 	if (stream_mode_ == AudioStreamMode::RENDER_EXCLUSIVE) {
-		ActivateExclusiveStream();
+		hr = ActivateExclusiveStream();
 	} else {
-		ActivateSharedStream();
+		hr = ActivateSharedStream();
 	}
+	if (!SUCCEEDED(hr)) return hr;
 
 	// Create Audio Renderer.
 	hr = CreateRenderer();
@@ -67,9 +68,10 @@ AudioEngine::~AudioEngine() {
 		if (i) CloseHandle(i);
 	}
 
-	// Free stream_format_.
+	// Free stream_format_ (allocated by CoTaskMemAlloc via GetMixFormat or manually).
 	if (stream_format_) {
 		CoTaskMemFree(stream_format_);
+		stream_format_ = nullptr;
 	}
 };	// Releasing ComPtr.
 
@@ -114,7 +116,7 @@ void AudioEngine::RenderStream() {
 		_ASSERT(SUCCEEDED(hr));
 
 		// Set an initial value to all data.
-		std::fill_n(buffer, frames - padding, 0);
+		std::fill_n(buffer, (frames - padding) * stream_format_->nBlockAlign, static_cast<BYTE>(0));
 
 		// Release current buffer.
 		hr = render_client_->ReleaseBuffer(frames - padding, 0);
@@ -127,23 +129,23 @@ void AudioEngine::Update() {
 	std::cout << "StreamFormat->cbSize: " << stream_format_->cbSize << std::endl;
 }
 
-void AudioEngine::ActivateSharedStream() {
+HRESULT AudioEngine::ActivateSharedStream() {
 	auto hr = device_->Activate(__uuidof(IAudioClient)
 									, CLSCTX_ALL
 									, nullptr
 									, &audio_client_
 	);
-	_ASSERT(SUCCEEDED(hr));
+	if (!SUCCEEDED(hr)) return hr;
 
 	// Retrieve the device period for latency from the audio client.
 	REFERENCE_TIME def_period, min_period = 0;
 	hr = audio_client_->GetDevicePeriod(&def_period, &min_period);
-	_ASSERT(SUCCEEDED(hr));
+	if (!SUCCEEDED(hr)) return hr;
 
 #pragma region // Check whether the stream format is supported.
 	hr = audio_client_->GetMixFormat(&stream_format_);
 	WAVEFORMATEXTENSIBLE* closest = nullptr;
-	_ASSERT(SUCCEEDED(hr));
+	if (!SUCCEEDED(hr)) return hr;
 
 	hr = audio_client_->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED
 									, stream_format_
@@ -153,6 +155,7 @@ void AudioEngine::ActivateSharedStream() {
 		// Restore closest in StreamFormat structure.
 		*stream_format_ = closest->Format;
 	}
+	if (closest) { CoTaskMemFree(closest); closest = nullptr; }
 #pragma endregion
 
 	// Initialize the audio client.
@@ -170,14 +173,14 @@ void AudioEngine::ActivateSharedStream() {
 		// Get the next aligned frame.
 		uint32_t n_frames = 0;
 		hr = audio_client_->GetBufferSize(&n_frames);
-		_ASSERT(SUCCEEDED(hr));
+		if (!SUCCEEDED(hr)) return hr;
 
 		def_period = static_cast<REFERENCE_TIME>(
 			std::round(10000.0 * 1000 / stream_format_->nSamplesPerSec * n_frames)
 		);
 
 		// Release.
-		audio_client_->Release();
+		audio_client_.Reset();
 
 		// Re-Activate the audio client.
 		hr = device_->Activate(__uuidof(IAudioClient)
@@ -185,11 +188,11 @@ void AudioEngine::ActivateSharedStream() {
 							, nullptr
 							, &audio_client_
 		);
-		_ASSERT(SUCCEEDED(hr));
+		if (!SUCCEEDED(hr)) return hr;
 
 		// Restore format.
 		hr = audio_client_->GetMixFormat(&stream_format_);
-		_ASSERT(SUCCEEDED(hr));
+		if (!SUCCEEDED(hr)) return hr;
 		closest = nullptr;
 
 		hr = audio_client_->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED
@@ -200,6 +203,7 @@ void AudioEngine::ActivateSharedStream() {
 			// Restore closest in StreamFormat structure.
 			*stream_format_ = closest->Format;
 		}
+		if (closest) { CoTaskMemFree(closest); closest = nullptr; }
 
 		// Re-Initialize.
 		hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED
@@ -210,14 +214,16 @@ void AudioEngine::ActivateSharedStream() {
 			, nullptr
 		);
 
-		_ASSERT(SUCCEEDED(hr));
+		if (!SUCCEEDED(hr)) return hr;
 	}
 
 	hr = audio_client_->SetEventHandle(event_handle_[0]);
-	_ASSERT(SUCCEEDED(hr));
+	if (!SUCCEEDED(hr)) return hr;
+
+	return S_OK;
 }
 
-void AudioEngine::ActivateExclusiveStream() {
+HRESULT AudioEngine::ActivateExclusiveStream() {
 	// The number of retries for IsFormatSupported().
 	size_t			num_loops	= 0;
 	constexpr int	MAX_RETRIES	= 5;
@@ -229,23 +235,23 @@ void AudioEngine::ActivateExclusiveStream() {
 										, nullptr
 										, &audio_client_
 	);
-	_ASSERT(SUCCEEDED(hr));
+	if (!SUCCEEDED(hr)) return hr;
 
 	// Retrieve the device period for latency from the audio client.
 	REFERENCE_TIME def_period, min_period = 0;
 	hr = audio_client_->GetDevicePeriod(&def_period, &min_period);
-	_ASSERT(SUCCEEDED(hr));
+	if (!SUCCEEDED(hr)) return hr;
 
 	#pragma region // Check whether the stream format is supported.
 	ComPtr<IPropertyStore> store = nullptr;
 	hr = device_->OpenPropertyStore(STGM_READ, &store);
-	_ASSERT(SUCCEEDED(hr));
+	if (!SUCCEEDED(hr)) return hr;
 
 	PROPVARIANT   p_var{};
 	WAVEFORMATEX* pBlobData = nullptr;
 	do {
 		hr = store->GetValue(PKEY_AudioEngine_DeviceFormat, &p_var);
-		_ASSERT(SUCCEEDED(hr));
+		if (!SUCCEEDED(hr)) return hr;
 
 		pBlobData = reinterpret_cast<WAVEFORMATEX*>(p_var.blob.pBlobData);
 
@@ -255,10 +261,9 @@ void AudioEngine::ActivateExclusiveStream() {
 		);
 
 		num_loops++;
-		// Failed to retry IsFormatSupported().
 		if (num_loops > MAX_RETRIES) {
-			std::cout << "Failed to activate the audio client." << std::endl;
-			// TODO: Have to add exit process here.
+			PropVariantClear(&p_var);
+			return AUDCLNT_E_UNSUPPORTED_FORMAT;
 		}
 	} while (result != S_OK);
 	#pragma endregion
@@ -268,7 +273,7 @@ void AudioEngine::ActivateExclusiveStream() {
 	memcpy(stream_format_, pBlobData, format_size);
 
 	hr = PropVariantClear(&p_var);
-	_ASSERT(SUCCEEDED(hr));
+	if (!SUCCEEDED(hr)) return hr;
 
 
 	// Initialize the audio client.
@@ -285,14 +290,14 @@ void AudioEngine::ActivateExclusiveStream() {
 		// Get the next aligned frame.
 		uint32_t n_frames = 0;
 		hr = audio_client_->GetBufferSize(&n_frames);
-		_ASSERT(SUCCEEDED(hr));
+		if (!SUCCEEDED(hr)) return hr;
 
 		def_period = static_cast<REFERENCE_TIME>(
 			std::round(10000.0 * 1000 / stream_format_->nSamplesPerSec * n_frames)
 		);
 
 		// Release.
-		audio_client_->Release();
+		audio_client_.Reset();
 
 		// Re-Activate the audio client.
 		hr = device_->Activate(__uuidof(IAudioClient)
@@ -300,14 +305,14 @@ void AudioEngine::ActivateExclusiveStream() {
 							, nullptr
 							, &audio_client_
 		);
-		_ASSERT(SUCCEEDED(hr));
+		if (!SUCCEEDED(hr)) return hr;
 
 		// Restore format.
 		hr = audio_client_->IsFormatSupported(AUDCLNT_SHAREMODE_EXCLUSIVE
 										, stream_format_
 										, nullptr
 			);
-		_ASSERT(hr == S_OK);	// S_FALSE and AUDCLNT_E_UNSUPPORTED_FORMAT are not allowed.
+		if (hr != S_OK) return AUDCLNT_E_UNSUPPORTED_FORMAT;
 
 		// Re-Initialize.
 		hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_EXCLUSIVE
@@ -317,11 +322,13 @@ void AudioEngine::ActivateExclusiveStream() {
 			, stream_format_
 			, nullptr
 		);
-		_ASSERT(SUCCEEDED(hr));
+		if (!SUCCEEDED(hr)) return hr;
 	}
 
 	hr = audio_client_->SetEventHandle(event_handle_[0]);
-	_ASSERT(SUCCEEDED(hr));
+	if (!SUCCEEDED(hr)) return hr;
+
+	return S_OK;
 }
 
 void AudioEngine::EnumerateRenderDevice() {
@@ -366,8 +373,8 @@ HRESULT AudioEngine::AssignRenderDevice(const uint32_t &device_idx) {
 	auto hr = render_devices_->GetCount(&num_devices);
 	_ASSERT(SUCCEEDED(hr));
 
-	// Error
-	if (device_idx > num_devices) return hr;
+	// Error: device_idx is out of range (0 means default, 1..num_devices-1 are valid indices).
+	if (device_idx >= num_devices && device_idx != 0) return E_INVALIDARG;
 
 	// Activate.
 	if (device_idx == 0) {

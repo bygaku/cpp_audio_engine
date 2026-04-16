@@ -130,9 +130,9 @@ namespace wwist::audio_engine {
 	private:
 		void RenderStream();
 
-		void ActivateSharedStream();
+		HRESULT ActivateSharedStream();
 
-		void ActivateExclusiveStream();
+		HRESULT ActivateExclusiveStream();
 
 		void EnumerateRenderDevice();
 
