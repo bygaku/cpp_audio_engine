@@ -1,9 +1,9 @@
 # project root.
 cmake_minimum_required(VERSION 4.0.2)
 set(PROJECT_NAME "WISTYAUDIO")
-set(PROJECT_VER "0.1.0")
+set(PROJECT_VER "1.0.0")
 
-set(LIBRARY_NAME "wistlib")
+set(LIBRARY_NAME "witlib")
 set(EXE_NAME "application")
 
 project(${PROJECT_NAME}
@@ -17,7 +17,7 @@ set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # If testing modules, Set it to ON this option.
-option(BUILD_TEST "[RootLists]: build with test directory? *default is ON" ON)
+option(BUILD_TEST "[RootLists]: build with test directory? *default is ON" OFF)
 # Set it to ON to create an executable file.
 option(BUILD_EXE "[RootLists]: wanna create an executable file? *default is OFF" ON)
 

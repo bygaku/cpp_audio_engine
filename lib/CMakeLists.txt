@@ -1,10 +1,5 @@
-file(GLOB SOURCE CONFIGURE_DEPENDS "./src/*.cpp")
-
 # Create an library.
-add_library(${LIBRARY_NAME}
-        STATIC
-        ${SOURCE}
-)
+add_subdirectory(./src)
 
 target_include_directories(${LIBRARY_NAME}
         PUBLIC
