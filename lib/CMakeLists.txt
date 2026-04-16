@@ -1,10 +1,5 @@
-file(GLOB SOURCE CONFIGURE_DEPENDS "./src/*.cpp")
-
 # Create an library.
-add_library(${LIBRARY_NAME}
-        STATIC
-        ${SOURCE}
-)
+add_subdirectory(./src)
 
 target_include_directories(${LIBRARY_NAME}
         PUBLIC
@@ -13,6 +8,13 @@ target_include_directories(${LIBRARY_NAME}
 
 # Compiler options.
 if(MSVC)
+    target_link_libraries(${LIBRARY_NAME}
+            mmdevapi
+            ksuser
+            ole32
+            uuid
+            advapi32
+    )
     target_compile_definitions(${LIBRARY_NAME}
             PRIVATE
             UNICODE     # Unicode mode
